@@ -128,14 +128,12 @@ class Session(MutableMapping):
 
     def set(self, key, val, permanent=None, clientside=None):
         if key in self:
-            del self[key]
+            # use write=False to avoid a wasted write since we're about to call
+            # ensure_backend_write() ourselves after setting the key/value.
+            self.delete(key, write=False)
         channel, clientside = self._check_options(permanent, clientside)
         channel.set(key, val, clientside=clientside)
-
-        # If the response has already been flushed, we need to explicitly
-        # persist this set to the backend.
-        if self.flushed:
-            channel.backend_write()
+        self.ensure_backend_write(channel)
 
     def save(self, permanent=None, clientside=None):
         channel, clientside = self._check_options(permanent, clientside)
@@ -144,12 +142,23 @@ class Session(MutableMapping):
         else:
             channel.backend_dirty = True
 
+    def ensure_backend_write(self, channel):
+        # If the response has already been flushed, we need to explicitly
+        # persist these changes to the backend.
+        if self.flushed:
+            channel.backend_write()
+
     def __delitem__(self, key):
         if key not in self:
             raise KeyError(key)
+        self.delete(key)
+
+    def delete(self, key, write=True):
         for channel in self.channels.values():
             if key in channel:
                 channel.delete(key)
+                if write:
+                    self.ensure_backend_write(channel)
 
     def __contains__(self, key):
         return any((key in channel) for channel in self.channels.values())
